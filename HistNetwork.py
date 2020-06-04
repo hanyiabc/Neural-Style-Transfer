@@ -18,6 +18,7 @@ from keras import backend as K
 from keras.utils.data_utils import get_file
 from keras.utils.layer_utils import convert_all_kernels_in_model
 
+import tensorflow as tf
 """
 Neural Style Transfer with Keras 2.0.5
 
@@ -104,6 +105,8 @@ parser.add_argument('--preserve_color', dest='color', default="False", type=str,
 parser.add_argument('--min_improvement', default=0.0, type=float,
                     help='Defines minimum improvement required to continue script')
 
+parser.add_argument('--hist_weight', default=0.0, type=float, 
+                    help='Histogram loss weight')
 
 def str_to_bool(v):
     return v.lower() in ("true", "yes", "t", "1")
@@ -467,6 +470,69 @@ def total_variation_loss(x):
     return K.sum(K.pow(a + b, 1.25))
 
 
+def get_histogram(vec, rangee, nbins=100):
+    minn = rangee[0] - 0.01
+    maxx = rangee[1] + 0.01
+    bin_ranges = list()
+    result = K.zeros((nbins,))
+    binsize = (maxx - minn) / float(nbins) 
+    #construct bins
+    bin_ranges.append([float("-infinity"), minn]) #-inf -> min
+    for x in range(0, nbins):
+        start = minn + x * binsize
+        bin_ranges.append([start, start+binsize])
+    bin_ranges.append([maxx, float("infinity")]) #maxx -> inf
+
+    #assign items to bin
+    # for item in itt:
+    counter = 0
+    for binn in bin_ranges:
+        in_range = (binn[0] <= vec) & (vec < binn[1])
+        result[counter] = K.sum(in_range)
+        counter+=1        
+    return result 
+
+
+# def get_histogram(image, bins, range):
+#     # array with size of bins, set to zeros
+#     (minn, maxx) = range
+
+#     histogram = K.zeros(image.shape)
+    
+
+
+#     for pixel in image:
+#         histogram[pixel] += 1
+    
+    # return our final result
+#return histogram
+
+def hist_loss(x, generated):
+
+    r_range = [255 - 103.939 + 20, -103.939 - 20]
+    g_range = [255 - 116.779 + 20, -116.779 - 20]
+    b_range = [255 - 123.68 + 20, -123.68 - 20]
+
+    histB = tf.get_histogram( K.flatten(x[:, :, 0]), b_range)
+    histG = tf.get_histogram( K.flatten(x[:, :, 1]) , g_range)
+    histR = tf.get_histogram( K.flatten(x[:, :, 2]),  r_range)
+
+    histBGen = tf.get_histogram( K.flatten(generated[:, :, 0]),  b_range)
+    histGGen = tf.get_histogram( K.flatten(generated[:, :, 1]),  g_range)
+    histRGen = tf.get_histogram( K.flatten(generated[:, :, 2]),  r_range)
+
+    # histB = tf.histogram_fixed_width( K.flatten(x[:, :, 0]), b_range, dtype=tf.dtypes.int32)
+    # histG = tf.histogram_fixed_width( K.flatten(x[:, :, 1]) , g_range, dtype=tf.dtypes.int32)
+    # histR = tf.histogram_fixed_width( K.flatten(x[:, :, 2]),  r_range, dtype=tf.dtypes.int32 )
+
+    # histBGen = tf.histogram_fixed_width( K.flatten(generated[:, :, 0]),  b_range, dtype=tf.dtypes.int32 )
+    # histGGen = tf.histogram_fixed_width( K.flatten(generated[:, :, 1]),  g_range, dtype=tf.dtypes.int32 )
+    # histRGen = tf.histogram_fixed_width( K.flatten(generated[:, :, 2]),  r_range, dtype=tf.dtypes.int32 )
+
+    histLossTotal = K.sum(K.square(histR - histRGen)) + K.sum(K.square(histG - histGGen)) + K.sum(K.square(histB - histBGen))
+
+    return histLossTotal / 3
+
 # combine these loss functions into a single scalar
 loss = K.variable(0.)
 layer_features = outputs_dict[args.content_layer]  # 'conv5_2' or 'conv4_2'
@@ -500,6 +566,11 @@ for layer_name in feature_layers:
         loss = loss + (style_weights[j] / len(feature_layers)) * sl[j]
 
 loss = loss + total_variation_weight * total_variation_loss(combination_image)
+
+
+histLoss = args.hist_weight * hist_loss(ip[1, :], combination_image)
+
+loss += histLoss
 
 # get the gradients of the generated image wrt the loss
 grads = K.gradients(loss, combination_image)
